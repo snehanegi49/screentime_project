@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Screen Time Guardian",
+  "version": "1.0",
+  "description": "Tracks time on reels/social sites, sends it to your local dashboard and nudges you toward a productive activity.",
+  "host_permissions": ["http://localhost:8765/*", "http://127.0.0.1:8765/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.instagram.com/*", "*://*.youtube.com/*", "*://*.facebook.com/*",
+        "*://*.tiktok.com/*", "*://*.x.com/*", "*://*.twitter.com/*", "*://*.snapchat.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

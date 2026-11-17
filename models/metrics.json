@@ -1,0 +1,53 @@
+{
+  "best_model": "Random Forest",
+  "results": {
+    "Logistic Regression": {
+      "accuracy": 0.9310995752713545,
+      "precision": 0.7739463601532567,
+      "recall": 0.9351851851851852,
+      "f1": 0.8469601677148847,
+      "roc_auc": 0.9779564315352698,
+      "confusion_matrix": [
+        [
+          1569,
+          118
+        ],
+        [
+          28,
+          404
+        ]
+      ]
+    },
+    "Random Forest": {
+      "accuracy": 0.9367626238791883,
+      "precision": 0.7832699619771863,
+      "recall": 0.9537037037037037,
+      "f1": 0.860125260960334,
+      "roc_auc": 0.9790637555160376,
+      "confusion_matrix": [
+        [
+          1573,
+          114
+        ],
+        [
+          20,
+          412
+        ]
+      ]
+    }
+  },
+  "feature_importance": {
+    "start_hour": 0.1300814624112746,
+    "is_weekend": 0.004059959346188161,
+    "is_night": 0.1878689043741745,
+    "gap_since_last_min": 0.028221995326327912,
+    "sessions_so_far_today": 0.06007241518917886,
+    "reels_min_so_far_today": 0.07025476990189261,
+    "prev_session_min": 0.21590506585950586,
+    "cat_reels": 0.07663928005462187,
+    "cat_social": 0.056746765840323586,
+    "cat_messaging": 0.07522265046377051,
+    "cat_productive": 0.049259960591075465,
+    "cat_other": 0.04566677064166595
+  }
+}
