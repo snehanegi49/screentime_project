@@ -11,22 +11,12 @@ import pandas as pd
 import streamlit as st
 
 import db
-from models import predict_risk
+import live
+from bootstrap import ensure_artifacts
+from models import USER_FEATURES, build_user_features, predict_risk
 from recommender import recommend, time_of_day
 
-st.set_page_config(page_title="Screen Time & Activity Recommender", page_icon="🧭", layout="wide")
-
-
-# ---------------------------------------------------------------- bootstrap
-def ensure_artifacts():
-    """Generate data and train models on first run so the app works out of the box."""
-    if not os.path.exists("data/sessions.csv"):
-        from data_generator import generate_sessions
-        os.makedirs("data", exist_ok=True)
-        generate_sessions().to_csv("data/sessions.csv", index=False)
-    if not os.path.exists("models/classifier.joblib"):
-        import models
-        models.main()
+st.set_page_config(page_title="Screen Time & Activity Recommender", layout="wide")
 
 
 @st.cache_resource
@@ -36,30 +26,63 @@ def load_all():
     personas = pd.read_csv("data/user_personas.csv", index_col=0)
     centers = pd.read_csv("data/persona_centers.csv")
     clf = joblib.load("models/classifier.joblib")
+    clustering = joblib.load("models/clustering.joblib")
     with open("models/metrics.json") as f:
         metrics = json.load(f)
-    return sessions, personas, centers, clf, metrics
+    return sessions, personas, centers, clf, clustering, metrics
 
 
-sessions, personas, centers, clf, metrics = load_all()
+sessions, personas, centers, clf, clustering, metrics = load_all()
 
 # ---------------------------------------------------------------- sidebar
-st.sidebar.title("🧭 Screen Time Recommender")
-user_id = st.sidebar.selectbox("Select user", sorted(personas.index.tolist()))
-persona = personas.loc[user_id, "persona"]
+st.sidebar.title("Screen Time Recommender")
+source = st.sidebar.radio("Data source", ["Demo (synthetic users)", "My live data"])
+IS_LIVE = source == "My live data"
+
+if IS_LIVE:
+    user_id = 0
+    with st.sidebar.expander("Upload usage CSV"):
+        st.caption("Columns: start_time, duration_min, and app (e.g. Instagram) or app_category.")
+        up = st.file_uploader("CSV file", type="csv", label_visibility="collapsed")
+        if up is not None and st.button("Import file"):
+            try:
+                parsed = live.parse_upload(pd.read_csv(up))
+                live.save_dataframe(parsed)
+                st.success(f"Imported {len(parsed)} sessions.")
+            except Exception as e:  # noqa: BLE001
+                st.error(str(e))
+        if st.button("Clear my live data"):
+            live.clear(); st.rerun()
+    raw_live = live.load_live()
+    if raw_live.empty:
+        st.title("Waiting for your live data")
+        st.info("No sessions yet. Either:\n\n1. Start `py collector.py`, load the Chrome extension and browse Instagram / YouTube Shorts, or\n2. Upload a CSV from the sidebar (template: `data/upload_template.csv`).")
+        st.stop()
+    user_df = live.enrich(raw_live)
+    try:
+        feats = build_user_features(user_df)[USER_FEATURES]
+        cid = int(clustering["kmeans"].predict(clustering["scaler"].transform(feats))[0])
+        persona = clustering["names"][cid]
+    except Exception:  # noqa: BLE001
+        persona = "Not enough data yet"
+    st.sidebar.markdown(f"**You:** {len(user_df)} sessions over {user_df['date'].nunique()} day(s)")
+else:
+    user_id = st.sidebar.selectbox("Select user", sorted(personas.index.tolist()))
+    persona = personas.loc[user_id, "persona"]
+    user_df = sessions[sessions.user_id == user_id]
 st.sidebar.markdown(f"**Persona:** {persona}")
 stats = db.stats(user_id)
-st.sidebar.metric("🔥 Focus streak (days)", stats["streak"])
-st.sidebar.metric("✅ Productive swaps", stats["swaps"])
-st.sidebar.caption("Demo uses synthetic usage data (real logs are privacy-restricted).")
+st.sidebar.metric("Focus streak (days)", stats["streak"])
+st.sidebar.metric("Productive swaps", stats["swaps"])
+st.sidebar.caption("Live mode uses your real browsing; models were trained on synthetic data." if IS_LIVE
+                   else "Demo uses synthetic usage data (real logs are privacy-restricted).")
 
-user_df = sessions[sessions.user_id == user_id]
 tab_dash, tab_risk, tab_rec, tab_progress, tab_model = st.tabs(
-    ["📊 Dashboard", "⚠️ Risk Check", "💡 Activity Suggestions", "🏆 Progress", "🔬 Model Report"])
+    ["Dashboard", "Risk Check", "Activity Suggestions", "Progress", "Model Report"])
 
 # ---------------------------------------------------------------- dashboard
 with tab_dash:
-    st.header(f"User {user_id} — {persona}")
+    st.header(f"{'You' if IS_LIVE else f'User {user_id}'} — {persona}")
     daily = user_df.groupby("date")["duration_min"].sum()
     scroll = user_df[user_df.app_category.isin(["reels", "social"])]["duration_min"].sum()
     c1, c2, c3, c4 = st.columns(4)
@@ -83,15 +106,20 @@ with tab_dash:
 with tab_risk:
     st.header("Will this session turn into a long scroll?")
     st.caption("Enter the situation at the moment the app is opened. The model estimates the chance it becomes a 30+ minute session.")
+    from datetime import datetime
+    ctx = live.current_context() if IS_LIVE else dict(sessions_so_far_today=4, reels_min_so_far_today=70.0, prev_session_min=25.0, gap_since_last_min=15.0)
+    now = datetime.now()
+    if IS_LIVE:
+        st.info("Fields are pre-filled from your live activity today.")
     a, b, c = st.columns(3)
-    hour = a.slider("Hour of day", 0, 23, 23)
-    dow = b.selectbox("Day", ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], index=5)
+    hour = a.slider("Hour of day", 0, 23, now.hour if IS_LIVE else 23)
+    dow = b.selectbox("Day", ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], index=now.weekday() if IS_LIVE else 5)
     cat = c.selectbox("App category", ["reels", "social", "messaging", "productive", "other"])
     d, e, f, g = st.columns(4)
-    gap = d.number_input("Minutes since last session", 1, 600, 15)
-    n_sess = e.number_input("Sessions so far today", 0, 30, 4)
-    reel_min = f.number_input("Reels/social minutes today", 0, 600, 70)
-    prev = g.number_input("Last session length (min)", 0, 180, 25)
+    gap = d.number_input("Minutes since last session", 1, 600, int(min(ctx["gap_since_last_min"], 600)))
+    n_sess = e.number_input("Sessions so far today", 0, 30, int(min(ctx["sessions_so_far_today"], 30)))
+    reel_min = f.number_input("Reels/social minutes today", 0, 600, int(min(ctx["reels_min_so_far_today"], 600)))
+    prev = g.number_input("Last session length (min)", 0, 180, int(min(ctx["prev_session_min"], 180)))
 
     if st.button("Check risk", type="primary"):
         risk = predict_risk(clf, dict(day_of_week=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].index(dow),
@@ -121,7 +149,7 @@ with tab_rec:
     mood = st.text_input("How are you feeling? (optional)", placeholder="e.g. stressed, bored, tired")
     st.caption(f"Time of day: **{time_of_day(h)}** · past feedback shapes the ranking.")
 
-    if "suggestions" not in st.session_state or st.button("🔄 Get suggestions"):
+    if "suggestions" not in st.session_state or st.button("Get suggestions"):
         st.session_state["suggestions"] = recommend(h, energy, free, mood, weights=db.activity_weights(user_id))
         st.session_state["answered"] = set()
 
@@ -134,10 +162,10 @@ with tab_rec:
                 continue
             ok, no = st.columns(2)
             risk_now = st.session_state.get("risk", 0.0)
-            if ok.button("👍 I'll do it", key=f"y_{s['id']}"):
+            if ok.button("I'll do it", key=f"y_{s['id']}"):
                 db.log_feedback(user_id, risk_now, s["id"], True)
                 st.session_state["answered"].add(s["id"]); st.rerun()
-            if no.button("👎 Not now", key=f"n_{s['id']}"):
+            if no.button("Not now", key=f"n_{s['id']}"):
                 db.log_feedback(user_id, risk_now, s["id"], False)
                 st.session_state["answered"].add(s["id"]); st.rerun()
 
