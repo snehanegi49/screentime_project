@@ -33,50 +33,6 @@ def save_session(start_ms: float, duration_min: float, category: str, app: str =
 
 def save_dataframe(df: pd.DataFrame, path=DB_PATH):
     with _conn(path) as c:
-        df[["start_time", "duration_min", "app_category", "app"]].astype(
-            {"start_time": str}).to_sql("live_sessions", c, if_exists="append", index=False)
-
-
-def clear(path=DB_PATH):
-    with _conn(path) as c:
-        c.execute("DELETE FROM live_sessions")
-
-
-"""
-Real usage data: storage, upload parsing and feature building.
-
-Live data comes from (1) the Chrome extension via collector.py, or
-(2) a CSV uploaded in the dashboard. Both end up in the live_sessions table
-and are converted into the same feature columns the ML models were trained on.
-"""
-import sqlite3
-from datetime import datetime
-
-import pandas as pd
-
-DB_PATH = "data/app.db"
-VALID = ["reels", "social", "messaging", "productive", "other"]
-SCROLL = ["reels", "social"]
-
-
-def _conn(path=DB_PATH):
-    c = sqlite3.connect(path)
-    c.execute("""CREATE TABLE IF NOT EXISTS live_sessions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, start_time TEXT, duration_min REAL,
-        app_category TEXT, app TEXT)""")
-    return c
-
-
-def save_session(start_ms: float, duration_min: float, category: str, app: str = "", path=DB_PATH):
-    category = category if category in VALID else "other"
-    start = datetime.fromtimestamp(start_ms / 1000).isoformat(timespec="seconds")
-    with _conn(path) as c:
-        c.execute("INSERT INTO live_sessions (start_time, duration_min, app_category, app) VALUES (?,?,?,?)",
-                  (start, round(float(duration_min), 2), category, app))
-
-
-def save_dataframe(df: pd.DataFrame, path=DB_PATH):
-    with _conn(path) as c:
         out = df[["start_time", "duration_min", "app_category", "app"]].copy()
         out["start_time"] = pd.to_datetime(out["start_time"]).dt.strftime("%Y-%m-%dT%H:%M:%S")
         out.to_sql("live_sessions", c, if_exists="append", index=False)
